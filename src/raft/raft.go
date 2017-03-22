@@ -165,6 +165,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		reply.Term = rf.currentTerm
 		rf.votedFor = -1
+		rf.state = 0
 	}
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		if args.LastLogTerm != rf.log[rf.lastIndex].Term {
@@ -254,8 +255,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.state = 0
 	}
-	rf.state = 0
 	rf.timer.Reset(d * time.Millisecond)
 	if !(rf.lastIndex >= args.PrevLogIndex && rf.log[args.PrevLogIndex].Term == args.PrevLogTerm) {
 		reply.Term = rf.currentTerm
@@ -326,12 +327,10 @@ func (rf *Raft) Heartbeat() {
 		args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.lastIndex, PrevLogTerm: rf.log[rf.lastIndex].Term, LeaderCommit: rf.commitIndex}
 		reply := &AppendEntriesReply{}
 		for i := range rf.peers {
-			if i == rf.me {
-				continue
-			}
 			if (rf.sendAppendEntries(i, args, reply)) {
 				if reply.Term > rf.currentTerm {
 					rf.currentTerm = reply.Term
+					rf.state = 0
 				}
 			}
 		}
@@ -343,6 +342,7 @@ func (rf *Raft) SendRequestVoteToOther(i int, countChan chan bool, args * Reques
 	if rf.sendRequestVote(i, args, reply) {
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
+			rf.state = 0
 		}
 		if countChan != nil {
 			countChan <- reply.VoteGranted
