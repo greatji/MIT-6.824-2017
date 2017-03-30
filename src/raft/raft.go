@@ -25,6 +25,8 @@ import (
 	"time"
 	"math/rand"
 	"math"
+	"bytes"
+	"encoding/gob"
 )
 
 // import "bytes"
@@ -84,7 +86,8 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	var term int
 	var isleader bool
 	// Your code here (2A).
@@ -101,12 +104,14 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	e.Encode(rf.lastIndex)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -115,13 +120,15 @@ func (rf *Raft) persist() {
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.log)
+	d.Decode(&rf.lastIndex)
 }
 
 
@@ -154,6 +161,7 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
+	defer rf.persist()
 	defer rf.mu.Unlock()
 	fmt.Printf("#%d server receive RequestVote rpc from #%d at term %d\n", rf.me, args.CandidateId, args.Term)
 	// Your code here (2A, 2B).
@@ -178,12 +186,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		} else {
 			fmt.Printf("#%d server is more update than requestvoter\n", rf.me)
 			reply.VoteGranted = false
-			return
 		}
 	} else {
 		fmt.Printf("#%d server has voted other\n", rf.me)
 		reply.VoteGranted = false
-		return
 	}
 	if (reply.VoteGranted) {
 		rf.votedFor = args.CandidateId
@@ -258,6 +264,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
+	defer rf.persist()
 	defer rf.mu.Unlock()
 	fmt.Printf("#%d server receive appendentries rpc from #%d at term %d, preLogIndex; %d, currentLastIndex: %d %d, entryLen: %d, isHeartbeat: %v\n", rf.me, args.LeaderId, args.Term, args.PrevLogIndex, rf.lastIndex, len(rf.log), len(args.Entries), len(args.Entries) == 0)
 	// Your code here (2A, 2B).
@@ -410,11 +417,12 @@ func (rf *Raft) Agreement(command interface{}, lastIndex int) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//index := rf.lastIndex + 1
 	rf.mu.Lock()
+	defer rf.persist()
 	defer rf.mu.Unlock()
 	term := rf.currentTerm
 	//isLeader := true
 	// Your code here (2B).
-	_, isLeader := rf.GetState()
+	isLeader := rf.state == 2
 	if isLeader {
 		rf.log = append(rf.log, Log{Term: rf.currentTerm, Command: command})
 		rf.lastIndex ++
