@@ -201,7 +201,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.persist()
 		var d time.Duration
 		d = time.Duration(2000 * rand.Float64() + 1000)
-		rf.timer.Reset(d * time.Millisecond)
+		if rf.timer != nil {
+			rf.timer.Reset(d * time.Millisecond)
+		}
 	}
 	fmt.Printf("#%d server receive RequestVote rpc from #%d at term %d, result: %v\n", rf.me, args.CandidateId, rf.currentTerm, reply.VoteGranted)
 	return
@@ -290,7 +292,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.votedFor = -1
 		rf.persist()
 	}
-	rf.timer.Reset(d * time.Millisecond)
+	if rf.timer != nil {
+		rf.timer.Reset(d * time.Millisecond)
+	}
 	if rf.lastIndex < args.PrevLogIndex {
 		reply.ConflictTerm = -1
 		reply.ConflictIndex = rf.lastIndex + 1
@@ -414,20 +418,22 @@ func (rf *Raft) Agreement() {
 			}
 		}
 		rf.mu.Lock()
-		for N := rf.lastIndex; N > rf.commitIndex; N -- {
-			count := 0
-			total := len(rf.peers)
-			for _, v := range rf.matchIndex {
-				if v >= N {
-					count ++
-					if count > total / 2 {
-						break
+		if rf.state == 2 {
+			for N := rf.lastIndex; N > rf.commitIndex; N -- {
+				count := 0
+				total := len(rf.peers)
+				for _, v := range rf.matchIndex {
+					if v >= N {
+						count ++
+						if count > total / 2 {
+							break
+						}
 					}
 				}
-			}
-			if count > total / 2 && rf.log[N].Term == rf.currentTerm {
-				rf.commitIndex = N
-				break
+				if count > total / 2 && rf.log[N].Term == rf.currentTerm {
+					rf.commitIndex = N
+					break
+				}
 			}
 		}
 		rf.mu.Unlock()
@@ -506,8 +512,8 @@ func (rf *Raft) SendHeartbeatToAnother(i int, args * AppendEntriesArgs, reply * 
 
 func (rf *Raft) Heartbeat() {
 	for rf.state == 2 {
-		rf.leaderTimer = time.NewTimer(100 * time.Millisecond)
 		rf.mu.Lock()
+		rf.leaderTimer = time.NewTimer(100 * time.Millisecond)
 		for i := range rf.peers {
 			args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.lastIndex, PrevLogTerm: rf.log[rf.lastIndex].Term, LeaderCommit: rf.commitIndex}
 			reply := &AppendEntriesReply{}
@@ -531,14 +537,24 @@ func (rf *Raft) SendRequestVoteToOther(i int, countChan chan bool, args * Reques
 			if rf.leaderTimer != nil {
 				rf.leaderTimer.Stop()
 			}
-		}
-		if countChan != nil {
-			fmt.Printf("%d server vote as %v at term %d\n", i, reply.VoteGranted, rf.currentTerm)
-			countChan <- reply.VoteGranted
+			if countChan != nil {
+				fmt.Printf("#%d server receive vote from #%d server at term %d, turn to Follower\n", rf.me, i, args.Term)
+				countChan <- false
+			}
+		} else if args.Term < rf.currentTerm {
+			if countChan != nil {
+				fmt.Printf("#%d server receive false vote from #%d server at term %d because the reply is expired\n", rf.me, reply.VoteGranted, i, args.Term)
+				countChan <- false
+			}
+		} else {
+			if countChan != nil {
+				fmt.Printf("#%d server receive %v vote from #%d server at term %d\n", rf.me, reply.VoteGranted, i, args.Term)
+				countChan <- reply.VoteGranted
+			}
 		}
 	} else {
 		if countChan != nil {
-			fmt.Printf("%d server vote as false at term %d\n", i, rf.currentTerm)
+			fmt.Printf("#%d server cannot receive vote from #%d server at term %d, network is block\n", rf.me, i, args.Term)
 			countChan <- false
 		}
 	}
@@ -589,13 +605,13 @@ func (rf *Raft) Elect() {
 				if i {
 					count ++
 				}
-				if count > total / 2 || curTotal == total {
+				if count > total / 2 || curTotal == total || rf.state != 1{
 					break
 				}
 			}
 
-
-			if count > total / 2 {
+			if count > total / 2 && rf.state == 1 {
+				rf.mu.Lock()
 				rf.state = 2
 				fmt.Printf("Leader chosen to be #%d server! count: %d, total: %d\n", rf.me, count, total)
 				rf.nextIndex = make([]int, len(rf.peers))
@@ -605,6 +621,7 @@ func (rf *Raft) Elect() {
 					rf.matchIndex[i] = 0
 				}
 				go rf.Heartbeat()
+				rf.mu.Unlock()
 			}
 		}()
 		rf.mu.Unlock()
