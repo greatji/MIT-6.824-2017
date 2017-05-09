@@ -7,9 +7,10 @@ import (
 	"raft"
 	"sync"
 	"time"
+	"bytes"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -47,6 +48,28 @@ type RaftKV struct {
 func (kv *RaftKV) UpdateStorage() {
 	for true {
 		a := <- kv.applyCh
+		DPrintf("Kvserver #%d, Get message", kv.me)
+		if a.UseSnapshot {
+
+			var lastIncludedIndex int
+			var lastIncludedTerm int
+			snapshot := bytes.NewBuffer(a.Snapshot)
+			decoder := gob.NewDecoder(snapshot)
+			decoder.Decode(&lastIncludedIndex)
+			decoder.Decode(&lastIncludedTerm)
+
+			kv.mu.Lock()
+			kv.kvStorage = make(map[string]string)
+			kv.getOpIdStorage = make(map[int64]GetReply)
+			kv.putAppendOpIdStorage = make(map[int64]PutAppendReply)
+			decoder.Decode(&kv.kvStorage)
+			decoder.Decode(&kv.getOpIdStorage)
+			decoder.Decode(&kv.putAppendOpIdStorage)
+			kv.mu.Unlock()
+
+			continue
+		}
+
 		kv.mu.Lock()
 		//DPrintf("lock")
 		log := a.Command.(Op)
@@ -87,6 +110,15 @@ func (kv *RaftKV) UpdateStorage() {
 			// when the kv is a follower
 			kv.result[a.Index] = make(chan Op, 1)
 		}
+
+		if kv.maxraftstate != -1 && kv.maxraftstate < kv.rf.GetPersistSize() {
+			buf := new(bytes.Buffer)
+			encoder := gob.NewEncoder(buf)
+			encoder.Encode(kv.kvStorage)
+			encoder.Encode(kv.getOpIdStorage)
+			encoder.Encode(kv.putAppendOpIdStorage)
+			go kv.rf.TakeSnapshot(buf.Bytes(), a.Index)
+		}
 		//DPrintf("unlock")
 		kv.mu.Unlock()
 	}
@@ -102,15 +134,15 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		reply.Value = ""
 		return
 	} else {
-		kv.mu.Lock()
-		lastReply, ok := kv.getOpIdStorage[args.OpId]
-		kv.mu.Unlock()
-		if ok {
-			reply.Value = lastReply.Value
-			reply.Err = lastReply.Err
-			reply.WrongLeader = lastReply.WrongLeader
-			return
-		}
+		//kv.mu.Lock()
+		//lastReply, ok := kv.getOpIdStorage[args.OpId]
+		//kv.mu.Unlock()
+		//if ok {
+		//	reply.Value = lastReply.Value
+		//	reply.Err = lastReply.Err
+		//	reply.WrongLeader = lastReply.WrongLeader
+		//	return
+		//}
 		command := Op{Operation: "Get", Key: args.Key, Value: "", OpId: args.OpId}
 		index, _, isLeader := kv.rf.Start(command)
 		if !isLeader {
@@ -132,7 +164,7 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		case op := <- ch:
 			if op.OpId == args.OpId {
 				kv.mu.Lock()
-				lastReply, ok = kv.getOpIdStorage[args.OpId]
+				lastReply := kv.getOpIdStorage[args.OpId]
 				kv.mu.Unlock()
 				reply.WrongLeader = lastReply.WrongLeader
 				reply.Value = lastReply.Value
@@ -196,7 +228,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				reply.WrongLeader = true
 				return
 			}
-		case <- time.After(2000 * time.Millisecond):
+		case <- time.After(1000 * time.Millisecond):
 			reply.WrongLeader = true
 			return
 		}
@@ -238,7 +270,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg, 1)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
