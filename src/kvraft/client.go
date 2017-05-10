@@ -8,6 +8,8 @@ import "math/big"
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	lastLeader int
+	OperationId int
+	ClientId int64
 	// You will have to modify this struct.
 }
 
@@ -22,6 +24,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	ck.lastLeader = 0
+	ck.OperationId = 0
+	ck.ClientId = nrand()
 	// You'll have to add code here.
 	return ck
 }
@@ -41,19 +45,20 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	args := GetArgs{Key : key, OpId : nrand()}
+	args := GetArgs{Key : key, ClientId : ck.ClientId, OperationId: ck.OperationId}
+	ck.OperationId ++
 	reply := GetReply{}
 	id := ck.lastLeader
 	ok := ck.servers[id].Call("RaftKV.Get", &args, &reply)
-	DPrintf("Client GET (%v) operation, result is %v, %v", args.OpId, ok, reply.WrongLeader)
+	DPrintf("Client GET (%v, %d) operation, result is %v, %v", args.ClientId, args.OperationId, ok, reply.WrongLeader)
 	for !ok || reply.WrongLeader {
 		id = (id + 1) % len(ck.servers)
 		reply = GetReply{}
 		ok = ck.servers[id].Call("RaftKV.Get", &args, &reply)
-		DPrintf("Client GET (%v) operation, result is %v, %v", args.OpId, ok, reply.WrongLeader)
+		DPrintf("Client GET (%v, %d) operation, result is %v, %v", args.ClientId, args.OperationId, ok, reply.WrongLeader)
 	}
 	ck.lastLeader = id
-	DPrintf("Client GET operation (%v) completed", args.OpId)
+	DPrintf("Client GET operation (%v, %d) completed", args.ClientId, args.OperationId)
 	return reply.Value
 }
 
@@ -69,18 +74,19 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	args := PutAppendArgs{Key: key, Value: value, Op: op, OpId: nrand()}
+	args := PutAppendArgs{Key: key, Value: value, Op: op, ClientId: ck.ClientId, OperationId: ck.OperationId}
+	ck.OperationId ++
 	id := ck.lastLeader
 	reply := PutAppendReply{}
 	ok := ck.servers[id].Call("RaftKV.PutAppend", &args, &reply)
-	DPrintf("Client %v operation (%v), result is %v, %v", op, args.OpId, ok, reply.WrongLeader)
+	DPrintf("Client %v operation (%v, %d), result is %v, %v", op, args.ClientId, args.OperationId, ok, reply.WrongLeader)
 	for !ok || reply.WrongLeader {
 		id = (id + 1) % len(ck.servers)
 		reply = PutAppendReply{}
 		ok = ck.servers[id].Call("RaftKV.PutAppend", &args, &reply)
-		DPrintf("Client %v operation (%v), result is %v, %v", op, args.OpId, ok, reply.WrongLeader)
+		DPrintf("Client %v operation (%v, %d), result is %v, %v", op, args.ClientId, args.OperationId, ok, reply.WrongLeader)
 	}
-	DPrintf("Client %v operation (%v) completed", op, args.OpId)
+	DPrintf("Client %v operation (%v %d) completed", op, args.ClientId, args.OperationId)
 	ck.lastLeader = id
 }
 
