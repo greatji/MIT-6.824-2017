@@ -36,10 +36,12 @@ func nrand() int64 {
 }
 
 type Clerk struct {
-	sm       *shardmaster.Clerk
+	sm       * shardmaster.Clerk
 	config   shardmaster.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	OperationId int
+	ClientId int64
 }
 
 //
@@ -56,6 +58,9 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.OperationId = 0
+	ck.ClientId = nrand()
+
 	return ck
 }
 
@@ -69,6 +74,10 @@ func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
 
+	args.ClientId = ck.ClientId
+	args.OperationId = ck.OperationId
+	ck.OperationId ++
+
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
@@ -78,6 +87,7 @@ func (ck *Clerk) Get(key string) string {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
+				DPrintf("ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, ck.OperationId, ok, reply.Err)
 				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
 					return reply.Value
 				}
@@ -104,15 +114,20 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Value = value
 	args.Op = op
 
+	args.ClientId = ck.ClientId
+	args.OperationId = ck.OperationId
+	ck.OperationId ++
 
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		DPrintf("ClientId: %v, OperationId: %d, key: %s, shard: %d, gid: %d", args.ClientId, args.OperationId, key, shard, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				DPrintf("ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, args.OperationId, ok, reply.Err)
 				if ok && reply.WrongLeader == false && reply.Err == OK {
 					return
 				}

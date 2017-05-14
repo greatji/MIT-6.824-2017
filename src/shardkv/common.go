@@ -13,6 +13,8 @@ const (
 	OK            = "OK"
 	ErrNoKey      = "ErrNoKey"
 	ErrWrongGroup = "ErrWrongGroup"
+	ErrWrongLeader = "ErrWrongLeader"
+	ErrNotReady = "ErrNotReady"
 )
 
 type Err string
@@ -26,6 +28,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OperationId	int
+	ClientId	int64
 }
 
 type PutAppendReply struct {
@@ -36,10 +40,25 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	OperationId	int
+	ClientId	int64
 }
 
 type GetReply struct {
 	WrongLeader bool
 	Err         Err
 	Value       string
+}
+
+type ShardsArgs struct {
+	ShardsRequired	[]int
+	ConfigNum	int
+}
+
+type ShardsReply struct {
+	Kvstore		map[string]string
+	History		map[int64]int
+	Err		Err
+	ConfigNum	int
+	WrongLeader	bool
 }
