@@ -606,6 +606,9 @@ func (rf *Raft) SendAppendEntryToAnother(i int, countCh chan bool, args * Append
 	rf.mu.Lock()
 	//DPrintf("server %d SendAppendEntryToAnother lock", rf.me)
 	defer rf.mu.Unlock()
+	if rf.state != 2 {
+		return
+	}
 	if /*rf.lastIndex >= rf.nextIndex[i] &&*/ ok {
 		if rf.currentTerm < reply.Term {
 			DPrintf("Leader #%d: Receive reply from server #%d, reply term is larger", rf.me, i)
@@ -664,9 +667,13 @@ func (rf *Raft) Agreement() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//DPrintf("server %d Agreement lock", rf.me)
+	if rf.state != 2 {
+		return
+	}
 	countCh := make(chan bool, 10)
 	for i := range rf.peers {
 		if rf.nextIndex[i] > rf.offset {
+			DPrintf("Server %d send append entry to server %d, nextIndex: %d, offset: %d, lastIndex: %d, logLen: %d", rf.me, i, rf.nextIndex[i], rf.offset, rf.lastIndex, len(rf.log))
 			args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.nextIndex[i] - 1, PrevLogTerm: rf.log[rf.nextIndex[i] - 1 - rf.offset].Term, LeaderCommit: rf.commitIndex, Entries: rf.log[rf.nextIndex[i] - rf.offset : rf.lastIndex + 1 - rf.offset]}
 			reply := &AppendEntriesReply{}
 			go rf.SendAppendEntryToAnother(i, countCh, args, reply)
@@ -860,7 +867,7 @@ func (rf *Raft) ApplyEntry(applyCh chan ApplyMsg) {
 		}
 		for rf.commitIndex > rf.lastApplied {
 			rf.lastApplied ++
-			DPrintf("Server #%d add msg to apply chan 817, lastapplied: %d", rf.me, rf.lastApplied)
+			DPrintf("Server #%d add msg to apply chan 817, lastapplied: %d, lastIndex: %d, offset: %d, commitIndex: %d, logLen: %d", rf.me, rf.lastApplied, rf.lastIndex, rf.offset, rf.commitIndex, len(rf.log))
 			applyCh <- ApplyMsg{Index: rf.lastApplied, Command: rf.log[rf.lastApplied - rf.offset].Command}
 		}
 		//DPrintf("server %d ApplyEntry unlock", rf.me)
