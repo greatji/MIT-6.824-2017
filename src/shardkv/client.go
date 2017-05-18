@@ -12,13 +12,25 @@ import "labrpc"
 import "crypto/rand"
 import "math/big"
 import "shardmaster"
-import "time"
+import (
+	"time"
+	"log"
+)
 
 //
 // which shard is a key in?
 // please use this function,
 // and please do not change it.
 //
+const Debug1 = 1
+
+func CPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug1 > 0 {
+		log.Printf(format, a...)
+	}
+	return
+}
+
 func key2shard(key string) int {
 	shard := 0
 	if len(key) > 0 {
@@ -81,14 +93,15 @@ func (ck *Clerk) Get(key string) string {
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		CPrintf("Get, ClientId: %v, OperationId: %d, key: %s, shard: %d, gid: %d", args.ClientId, args.OperationId, key, shard, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
-				DPrintf("ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, ck.OperationId, ok, reply.Err)
-				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
+				CPrintf("Get, ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, args.OperationId, ok, reply.Err)
+				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey || reply.Err == ErrExpiredQuery) {
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -121,15 +134,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
-		DPrintf("ClientId: %v, OperationId: %d, key: %s, shard: %d, gid: %d", args.ClientId, args.OperationId, key, shard, gid)
+		CPrintf("PutAppend, ClientId: %v, OperationId: %d, key: %s, shard: %d, gid: %d", args.ClientId, args.OperationId, key, shard, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				DPrintf("ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, args.OperationId, ok, reply.Err)
-				if ok && reply.WrongLeader == false && reply.Err == OK {
-					return
+				CPrintf("PutAppend, ClientId %v, OpId %d, Ok: %v, Error: %s", ck.ClientId, args.OperationId, ok, reply.Err)
+				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrExpiredQuery) {
+						return
 				}
 				if ok && reply.Err == ErrWrongGroup {
 					break
