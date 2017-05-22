@@ -185,6 +185,8 @@ func (kv *ShardKV) UpdateStorage() {
 			if log.ConfigNum == kv.currentConfig.Num {
 				for k, v := range log.KvStore {
 					kv.kvStorage[k] = v
+					shard := key2shard(k)
+					kv.currentConfig.Shards[shard] = kv.gid
 				}
 				for k, v := range log.History {
 					value, ok := kv.historyRecord[k]
@@ -387,13 +389,7 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 
 	res := true
 	var wait sync.WaitGroup
-	var lock sync.Mutex
 	DPrintf("Server #%d-%d require shards: ShardsRequired: %v", kv.gid, kv.me, shardsRequired)
-	operation := Op{}
-	operation.Operation = ADD_SHARDS
-	operation.ConfigNum = oldConfig.Num
-	operation.History = make(map[int64]int)
-	operation.KvStore = make(map[string]string)
 	for k, v := range shardsRequired {
 		// send group k with v requirements
 		wait.Add(1)
@@ -407,7 +403,11 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 			if !ok {
 				res = false
 			} else {
-				lock.Lock()
+				operation := Op{}
+				operation.Operation = ADD_SHARDS
+				operation.ConfigNum = oldConfig.Num
+				operation.History = make(map[int64]int)
+				operation.KvStore = make(map[string]string)
 				for k, v := range reply.Kvstore {
 					operation.KvStore[k] = v
 				}
@@ -421,15 +421,12 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 						operation.History[k] = v
 					}
 				}
-				lock.Unlock()
+				kv.rf.Start(operation)
 			}
 		}(k, v)
 	}
 	wait.Wait()
 
-	if res {
-		kv.rf.Start(operation)
-	}
 	return res
 }
 
