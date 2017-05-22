@@ -1,4 +1,5 @@
 package shardkv
+import "shardmaster"
 
 //
 // Sharded key/value server.
@@ -64,3 +65,11 @@ type ShardsReply struct {
 	ConfigNum	int
 	WrongLeader	bool
 }
+
+type ConfigArgs struct {
+	ConfigNum	int
+	Gid 		int
+	Shards		[shardmaster.NShards]int
+}
+
+type ConfigReply struct {}

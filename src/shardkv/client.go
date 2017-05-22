@@ -22,7 +22,7 @@ import (
 // please use this function,
 // and please do not change it.
 //
-const Debug1 = 1
+const Debug1 = 0
 
 func CPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug1 > 0 {

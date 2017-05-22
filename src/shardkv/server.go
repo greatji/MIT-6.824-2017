@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -65,6 +65,8 @@ type ShardKV struct {
 	kvStorage 	map[string]string
 	historyRecord	map[int64]int
 	result 		map[int]chan Result
+
+	OtherConfigNum  map[int]int
 	AnswerShardsId	int
 }
 
@@ -267,6 +269,35 @@ func (kv *ShardKV) UpdateStorage() {
 	}
 }
 
+func(kv *ShardKV) DeleteShards(args *ConfigArgs, reply *ConfigReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	DPrintf("Server #%d-%d Receive ConfigInfo %v", kv.gid, kv.me, *args)
+	if args.ConfigNum >= kv.currentConfig.Num {
+		for k := range kv.kvStorage {
+			shard := key2shard(k)
+			if args.Shards[shard] == args.Gid {
+				delete(kv.kvStorage, k)
+			}
+		}
+	}
+	return
+}
+
+func(kv *ShardKV) SendConfigInfo(args *ConfigArgs, reply * ConfigReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	DPrintf("Server #%d-%d Send ConfigInfo %v", kv.gid, kv.me, *args)
+	for k, v := range kv.currentConfig.Groups {
+		if k == kv.gid {
+			continue
+		}
+		for _, server := range v {
+			go kv.make_end(server).Call("ShardKV.DeleteShards", args, reply)
+		}
+	}
+}
+
 func(kv *ShardKV) AnswerShards(args *ShardsArgs, reply *ShardsReply) {
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
@@ -340,7 +371,7 @@ func (kv *ShardKV) SendRequireShards(gid int, oldConfig shardmaster.Config, args
 	return false
 }
 
-func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardmaster.Config) bool {
+func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardmaster.Config) (bool) {
 
 	shardsRequired := make(map[int][]int)
 	for shardIndex, gid := range newConfig.Shards {
@@ -356,7 +387,13 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 
 	res := true
 	var wait sync.WaitGroup
+	var lock sync.Mutex
 	DPrintf("Server #%d-%d require shards: ShardsRequired: %v", kv.gid, kv.me, shardsRequired)
+	operation := Op{}
+	operation.Operation = ADD_SHARDS
+	operation.ConfigNum = oldConfig.Num
+	operation.History = make(map[int64]int)
+	operation.KvStore = make(map[string]string)
 	for k, v := range shardsRequired {
 		// send group k with v requirements
 		wait.Add(1)
@@ -370,11 +407,7 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 			if !ok {
 				res = false
 			} else {
-				operation := Op{}
-				operation.Operation = ADD_SHARDS
-				operation.ConfigNum = oldConfig.Num
-				operation.History = make(map[int64]int)
-				operation.KvStore = make(map[string]string)
+				lock.Lock()
 				for k, v := range reply.Kvstore {
 					operation.KvStore[k] = v
 				}
@@ -388,12 +421,15 @@ func (kv *ShardKV) RequireShards(newConfig shardmaster.Config, oldConfig shardma
 						operation.History[k] = v
 					}
 				}
-				kv.rf.Start(operation)
+				lock.Unlock()
 			}
 		}(k, v)
 	}
-
 	wait.Wait()
+
+	if res {
+		kv.rf.Start(operation)
+	}
 	return res
 }
 
@@ -416,6 +452,10 @@ func (kv *ShardKV) CheckMigration() {
 				operation.Operation = CONF_CHANGE
 				operation.NewConf = newConfig
 				index, _, isLeader := kv.rf.Start(operation)
+				//operation.Operation = SHUFFLE_CONF_VERSION
+				//// Exchange newest configuration version
+				//operation.ConfigNum = kv.currentConfig.Num
+				//kv.rf.Start(operation)
 				if !isLeader {
 					break
 				}
@@ -433,6 +473,14 @@ func (kv *ShardKV) CheckMigration() {
 						break
 					} else {
 						oldConfig = newConfig
+
+						args := ConfigArgs{}
+						args.ConfigNum = kv.currentConfig.Num
+						args.Gid = kv.gid
+						args.Shards = kv.currentConfig.Shards
+						reply := ConfigReply{}
+						go kv.SendConfigInfo(&args, &reply)
+
 					}
 				case <- time.After(1000 * time.Millisecond): break
 				}
